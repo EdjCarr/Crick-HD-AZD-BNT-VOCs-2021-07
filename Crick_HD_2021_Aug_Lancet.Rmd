@@ -1,0 +1,1633 @@
+---
+title: ''
+author: ''
+date: ''
+output:
+  pdf_document: default
+  word_document: default
+geometry: left=1cm,right=1cm,top=1cm,bottom=1cm
+header-includes:
+- \usepackage{caption}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, results = "hide", fig.height = 8, fig.width = 9, fig.keep = "none")
+```
+
+```{r}
+#########
+# Crick haemodialysis COVID-19 vaccination study
+# Neutralisation tites against SARS-CoV-2 Variants of Concern:
+# alpha, beta and delta
+#
+# Edward Carr, Cell Biology of Infection Lab, Francis Crick Institute
+# 
+#
+# Code adapted, and sometimes adopted, from David LV Bauer's analysis of the LEGACY cohort:
+# https://github.com/davidlvb/Crick-UCLH-Legacy-VOCs-2021-05/blob/main/Crick_Legacy_2021-24-05_B-1-617-2_GeneratePlots.R
+#
+#
+# This work is licensed under a CC BY 4.0 license and is free to use with attribution
+#
+# 13 July 2021
+#########
+
+library(tidyverse)
+library(lubridate)
+library(magrittr)
+library(boot)
+library(rms)
+library(ggpubr)
+library(patchwork)
+library(cowplot)
+library(furniture)
+library(rstatix)
+
+######
+# To write out separate figure files:
+sep.fig.files <- TRUE
+fig.dir <- "figures"
+fig.height <- 8 ## inches
+fig.width <- 8 ## inches
+fig.format <- "jpeg" 
+dpi <- 600
+
+######
+
+if(sep.fig.files == TRUE) { dir.create(fig.dir) }
+```
+
+```{r}
+#### Load dataset:
+# This contains:
+# - patients with data available from first 3 visits
+# - MN results for all 3
+load(file = "Crick_HD_2021-07-12_PUBLIC.RData")
+# The public data, does NOT include:
+# - dates
+# - ages [age provided as 18-65 or >65]
+# - immunosuppression [too small a group]
+# - dialysis centre name; codes only
+# - the research identifier has been parsed so the code provided can be executed [but it isn't the full identifier used in the lab].
+
+# The OUTCOME column is from the Crick's anti-S ELISA.
+
+#### Title case for VOCs:
+
+colnames(df) <- gsub(colnames(df), pattern = "alpha", replacement = "Alpha")
+colnames(df) <- gsub(colnames(df), pattern = "beta", replacement = "Beta")
+colnames(df) <- gsub(colnames(df), pattern = "delta", replacement = "Delta")
+colnames(df) <- gsub(colnames(df), pattern = "wildtype", replacement = "Wildtype")
+
+
+```
+
+```{r}
+############################
+### Functions for later:
+### bootstrapping median FC
+############################
+boot_foldMedian <- function(d, i){
+  d2 <- d[i,]
+
+    firstCol <- d2 %>% pull(2)
+    secondCol <- d2 %>% pull(3)
+    foldMedian <- (median(firstCol, na.rm=TRUE) / median(secondCol, na.rm=TRUE))
+  return(foldMedian)
+}
+
+boot_foldMedian_paired <- function(d, i){
+  d2 <- d[i,]
+    firstCol <- d2 %>% pull(2)
+    secondCol <- d2 %>% pull(3)
+    divideCols <- firstCol / secondCol
+    foldMedian <- median(divideCols, na.rm=TRUE)
+    return(foldMedian)
+}
+  
+
+# CIbootstrap <- function(testTable, strainComparison, rpt=5000,grp= verbose = T) {
+#   statcheck <- testTable %>% filter(strain %in% strainComparison) %>% pivot_wider(values_from = ic50, names_from = strain)
+#   results_boot <- boot(statcheck, boot_foldMedian, R=rpt)
+#   results_ci <- boot.ci(results_boot,type="basic", conf = 0.95)
+#   results_obj <- list()
+#   results_obj$boot <- results_boot
+#   results_obj$ci <- results_ci
+#   results_obj$strainComparison <- strainComparison
+#   results_obj$results <- cbind(
+#     "Median1" = median(pull(statcheck, 2), na.rm=TRUE),
+#     "Median2" = median(pull(statcheck, 3), na.rm=TRUE),
+#     "MedianFC" = median(pull(statcheck, 2), na.rm=TRUE)
+#     /median(pull(statcheck, 3), na.rm=TRUE))
+#   if(verbose == TRUE) {
+#     print(results_boot)
+#   print(results_ci)
+#   print("######################################################")
+#   print(strainComparison)
+#   print(c("Median1", "Median2", "Fold-decrease"))
+#   print(c(median(pull(statcheck, 2), na.rm=TRUE),
+#           median(pull(statcheck, 3), na.rm=TRUE),
+#           median(pull(statcheck, 2), na.rm=TRUE)/ median(pull(statcheck, 3), na.rm=TRUE) )
+#   )}
+#   return(results_obj)
+# }
+
+
+CIbootstrapPaired <- function(testTable, strainComparison, rpt=5000, verbose = T) {
+  statcheck <- testTable %>% filter(strain %in% strainComparison) %>% pivot_wider(values_from = ic50, names_from = strain)
+  results_boot <- boot(statcheck, boot_foldMedian_paired, R=rpt)
+  results_ci <- boot.ci(results_boot,type="basic")
+  results_obj <- list()
+  results_obj$boot <- results_boot
+  results_obj$ci <- results_ci
+  results_obj$strainComparison <- strainComparison
+  results_obj$results <- cbind(
+    "Median1" = median(pull(statcheck, 2), na.rm=TRUE),
+    "Median2" = median(pull(statcheck, 3), na.rm=TRUE),
+    "MedianFC" = median(pull(statcheck, 2), na.rm=TRUE)
+    /median(pull(statcheck, 3), na.rm=TRUE))
+  if(verbose == TRUE) {
+    print(results_boot)
+  print(results_ci)
+  print("######################################################")
+  print(strainComparison)
+  print(c("Median1", "Median2", "Fold-decrease"))
+  print(c(median(pull(statcheck, 2), na.rm=TRUE),
+          median(pull(statcheck, 3), na.rm=TRUE),
+          median(pull(statcheck, 2), na.rm=TRUE)/ median(pull(statcheck, 3), na.rm=TRUE) )
+  )}
+  return(results_obj)
+}
+
+
+
+
+```
+
+```{r vaccine_deployment_over_time, eval=F}
+
+### DATES
+
+
+##################
+##################
+### THIS CHUNK WILL FAIL. Dates removed from public dataset.
+### Code as-is.
+##################
+##################
+
+begin <- dmy(010920)
+end <- dmy(010721)
+xbreak.begin <- dmy(300920)
+xbreak.end <- dmy(151220)
+##################
+
+g1 <- ggplot(df %>% filter(time_point == "baseline_bleed") %>% mutate(date = vaccine_1_date), aes(date)) + 
+  geom_freqpoly(lwd = 1, col = "grey") + 
+  geom_freqpoly(data = df %>% filter(time_point == "baseline_bleed"), mapping = aes(vaccine_2_date), col = "black", lwd = 1) + 
+  scale_x_date(breaks = "1 month", date_minor_breaks = "1 week", limits = c(begin, end), labels = scales::label_date_short() ) + 
+  ylab("\n# of\npatients") + xlab("") + 
+  # scale_y_continuous(breaks = c(0, 100, 200, 300), limits = c(0,300)) +
+  annotate(geom = "text", x = dmy(15122020), y = 75, label = "First doses", col = "black", size = 4) +
+    annotate(geom = "text", x = dmy(01062021), y = 75, label = "Second doses", col = "black", size = 4) +
+theme_pubr(base_size = 12) + theme(legend.position = "none")
+
+##################
+
+g2 <- ggplot(df, aes(bleed_date, col = time_point)) + geom_boxplot() +
+  xlim(begin, end) +# theme_pubr(base_size = 10, legend = "none") +
+  xlab("") +
+  scale_x_date(breaks = "1 month", date_minor_breaks = "1 week", limits = c(begin, end), labels = scales::label_date_short() ) +
+  scale_colour_manual(values = c("black", "black", "black")) + 
+  scale_y_continuous(breaks = c(-.2, 0, .2),
+                     labels = c("baseline","1", "2"),
+                     name = "Serum\nsampling") +
+  theme_pubr(base_size = 12) + theme(legend.position = "none")
+
+g1 / g2 + patchwork::plot_layout(heights = c(2,1), guides = "collect")  & 
+  plot_annotation(tag_levels = list(c("A", ""))) & 
+  theme(plot.tag = element_text(size = 14, face = "bold"))
+
+```
+
+
+```{r define_seronaive_make_barplot}
+
+### Define seronaive based on baseline anti-S IgG ELISA and PCR negative.
+### AND pre_vaccine_positive_test not TRUE  (there is missing data -> NAs)
+
+df %>% filter(time_point == "baseline_bleed") %>%
+               mutate(seronaive = (outcome == "NOT_DETECTED" & 
+                                     (! is.na(Wildtype_ic50)) &
+                                     Wildtype_ic50 == 5 & D614G_ic50 == 5 &
+  (pre_vaccine_positive_test == FALSE | is.na(pre_vaccine_positive_test)))) %>%
+           mutate(time_point = 
+                    str_replace(time_point, pattern = "_bleed", replacement = "")) %>%
+  group_by(outcome, ((! is.na(Wildtype_ic50)) &
+                                     Wildtype_ic50 == 5 & D614G_ic50 == 5),
+           (pre_vaccine_positive_test == FALSE | is.na(pre_vaccine_positive_test))) %>% tally()
+
+####
+# NARRATIVE:
+#
+## We treated any ELISA indeterminate / discrepant results as seropositive.
+## We wanted to have an antigen-naive seronaive cohort.
+
+# 35 = 11+15+5+1+1+2, patients excluded based on ELISA
+# 26 further excluded on presence of nAbs at baseline
+# 9 further excluded due to positive PCRs pre-first vaccine.
+#
+# This leaves 108 seronaive patients
+# (seropositve patients are considered in supp figure 1).
+####
+
+g4 <- ggplot(df %>% filter(time_point == "baseline_bleed") %>%
+               mutate(seronaive = (outcome == "NOT_DETECTED" & 
+                                     (! is.na(Wildtype_ic50)) &
+                                     Wildtype_ic50 == 5 & D614G_ic50 == 5 &
+  (pre_vaccine_positive_test == FALSE | is.na(pre_vaccine_positive_test)))) %>%
+           mutate(time_point = 
+                    str_replace(time_point, pattern = "_bleed", replacement = "")), 
+       aes(time_point, fill = seronaive)) + 
+  geom_bar(position = "fill", col = "black") +
+  scale_fill_manual(values = c("grey", "white"), labels = c("+ve", "-ve"), name = "serostatus") +
+  ylab("\nProportion of patients") +
+  xlab("") + 
+  theme_pubr(base_size = 12, legend = "right") 
+
+g4
+```
+
+```{r plot_figure_1, eval=F}
+
+##################
+##################
+### THIS CHUNK WILL FAIL. Dates removed from public dataset.
+### Code as-is.
+##################
+##################
+
+plot_grid(
+  # Time series plots in their own wrap so axes align.
+    plot_grid(g1, g2, 
+            ncol = 1,align = "hv",
+            rel_heights = c(1,1)),
+    
+    g4,
+    ncol = 2,rel_widths = c(4,1.75),
+    
+    labels = c("A", "B"))
+
+if(sep.fig.files == TRUE) { ggsave(filename = paste0(fig.dir,"/Figure1_study_design.jpeg"),
+                                 device = "jpeg",
+                                 dpi = 600,
+                                 width = fig.width,
+                                height = 5) }
+```
+
+
+```{r compare_VOC_nAbs_in_seronaive}
+## Work out data to plot:
+## Reset seronaive to no nAbs, no positive tests + undetected anti-S.
+df <- df %>% 
+               mutate(seronaive = (outcome == "NOT_DETECTED" & 
+                                     Wildtype_ic50 == 5 & D614G_ic50 == 5 &
+  (pre_vaccine_positive_test == FALSE | is.na(pre_vaccine_positive_test)))) %>%
+           mutate(time_point = 
+                    str_replace(time_point, pattern = "_bleed", replacement = ""))
+
+
+seronaive.ids <- df %>% filter(seronaive == TRUE) %>% filter(time_point == "baseline")
+
+## Actually subset the data:
+seronaive.v2_28d_df.long  <- df %>% filter(research_identifier %in% seronaive.ids$research_identifier) %>%
+  filter(time_point == "vax2_28d") %>%
+  pivot_longer(cols = ends_with("ic50"), 
+               names_to = "strain", 
+               values_to = "ic50") %>%
+  mutate(strain = factor(str_replace(strain,
+                                     pattern = "_ic50", 
+                                     replacement = ""),
+                         levels = c("Wildtype", "D614G", "Alpha", "Beta", "Delta")))
+
+
+### Plot the data:
+top.panel.seron <- ggplot(seronaive.v2_28d_df.long, aes(vaccine,ic50, col = vaccine)) + 
+  scale_y_continuous(trans='log2',limits = c(4, 5121), 
+                     breaks=c(5, 10, 64, 256, 1024, 5120), 
+                     labels=c("[0]", "[<40]    ", "64", "256", "1024", "[>2560]"),
+                     minor_breaks=c(32, 128, 512, 2048),
+                     guide = guide_axis(n.dodge=1)) +
+  scale_color_manual(values = c("#8E0152", "#276419")) +
+  geom_violin(trim = T, col = "black") + 
+  geom_jitter(position = position_jitter(width = 0.2), alpha=0.3, size=1.5) +
+  ylab(bquote('Virus Neutralisation, '~IC[50]~ '')) +
+  xlab("Vaccine") + 
+  
+  facet_wrap(vars(strain), nrow = 1, 
+             scales = "fixed") +
+  stat_summary(fun=median, geom = "point", color="black",  shape=5, size=1.5, stroke=1.5) + 
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+data_for_barplot <- seronaive.v2_28d_df.long %>% 
+  filter(! is.na(ic50)) %>%
+  mutate(ic50Range = 
+           cut(ic50,
+               breaks=c(0,40,256,9999),
+               right=FALSE, label=c("<40", "40-256", ">256")))
+
+bottom.panel.seron <- ggplot(data_for_barplot, aes(x=ic50Range))  + 
+  geom_bar(aes(fill=vaccine, alpha=0.3)) +
+    scale_fill_manual(values = c("#8E0152", "#276419")) +
+  scale_y_continuous(guide = guide_axis(n.dodge=1), labels = c(0,"",30,"",60), breaks = c(0,15,30,45,60)) + 
+  coord_flip() + 
+  facet_grid(vaccine ~ strain, switch = "y") +
+  ylab("# patients") +
+  xlab( bquote(''~IC[50]~ '') ) +
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+top.panel.seron / bottom.panel.seron + patchwork::plot_layout(heights = c(1,1))
+
+```
+
+```{r}
+#####################
+# Bootstrapping fold change:
+####################
+comparisons <- list("wt_vs_D614G"=c("Wildtype", "D614G"),
+                    "wt_vs_Alpha"=c("Wildtype", "Alpha"),
+                    "wt_vs_Beta"=c("Wildtype", "Beta"),
+                    "wt_vs_Delta"=c("Wildtype", "Delta"),
+                    "Alpha_vs_Delta"=c("Alpha", "Delta"),
+                    "Beta_vs_Delta"=c("Beta", "Delta"))
+
+## Select AZ:
+testingData <- seronaive.v2_28d_df.long %>% 
+  ungroup %>% filter(vaccine == "AZD1222") %>%
+  select(sample_barcode, strain, ic50) 
+## lapply for all comparisons:
+AZ.medianFC <- lapply(comparisons, function(x) {
+  CIbootstrapPaired(testingData, x, verbose = F)
+})
+
+for(i in 1:length(AZ.medianFC)){
+  
+  if(i == 1) {
+    AZ.medianFC.df <- data.frame(
+      cbind("comparison"=names(AZ.medianFC)[i],
+  AZ.medianFC[[i]]$results,
+  "LL"=AZ.medianFC[[i]]$ci$basic[,4],
+  "UL"=AZ.medianFC[[i]]$ci$basic[,5],
+  "level" = AZ.medianFC[[i]]$ci$basic[,1]))
+    
+  }
+  
+  if(i > 1) {
+    AZ.medianFC.df <- rbind(AZ.medianFC.df,
+      cbind("comparison"=names(AZ.medianFC)[i],
+  AZ.medianFC[[i]]$results,
+  "LL"=AZ.medianFC[[i]]$ci$basic[,4],
+  "UL"=AZ.medianFC[[i]]$ci$basic[,5],
+  "level" = AZ.medianFC[[i]]$ci$basic[,1]))
+    }
+  
+}
+  
+
+#####
+## Repeat for Pfizer:
+testingData <- seronaive.v2_28d_df.long %>% 
+  ungroup %>% filter(vaccine == "BNT162b2") %>%
+  select(sample_barcode, strain, ic50) 
+## lapply for all comparisons:
+BNT162b2.medianFC <- lapply(comparisons, function(x) {
+  CIbootstrapPaired(testingData, x, verbose = F)
+})
+
+for(i in 1:length(BNT162b2.medianFC)){
+  
+  if(i == 1) {
+    BNT162b2.medianFC.df <- data.frame(
+      cbind("comparison"=names(BNT162b2.medianFC)[i],
+  BNT162b2.medianFC[[i]]$results,
+  "LL"=BNT162b2.medianFC[[i]]$ci$basic[,4],
+  "UL"=BNT162b2.medianFC[[i]]$ci$basic[,5],
+  "level" = BNT162b2.medianFC[[i]]$ci$basic[,1]))
+    
+  }
+  
+  if(i > 1) {
+    BNT162b2.medianFC.df <- rbind(BNT162b2.medianFC.df,
+      cbind("comparison"=names(BNT162b2.medianFC)[i],
+  BNT162b2.medianFC[[i]]$results,
+  "LL"=BNT162b2.medianFC[[i]]$ci$basic[,4],
+  "UL"=BNT162b2.medianFC[[i]]$ci$basic[,5],
+  "level" = BNT162b2.medianFC[[i]]$ci$basic[,1]))
+    }
+  
+}
+  
+####
+
+AZ.medianFC.df
+BNT162b2.medianFC.df
+
+
+#########
+
+## We want to estimate FC using <40 set at 40.
+seronaive.v2_28d_df.long.2 <- seronaive.v2_28d_df.long %>% 
+  ungroup() %>% 
+  mutate(ic50_2 = ic50)
+
+seronaive.v2_28d_df.long.2$ic50_2[seronaive.v2_28d_df.long.2$ic50_2 < 11] <- 40
+
+
+medianFC.AZvsBNT.allstrains <- seronaive.v2_28d_df.long.2 %>% 
+  ungroup() %>% 
+  mutate(vaccine_1_manufacturer = vaccine) %>%
+  select(sample_barcode, vaccine, vaccine_1_manufacturer, strain, ic50_2) %>% 
+  group_by(strain) %>% 
+  pivot_wider(values_from = ic50_2, names_from = vaccine) %>% 
+  # Select to force BNT ahead of AZ, which makes more sense from FCs:
+  select(sample_barcode, strain, BNT162b2, AZD1222, vaccine_1_manufacturer) %>% 
+  group_map( ~ {
+  results_boot <- boot(.x, boot_foldMedian, R=1000, 
+                       strata = match(.x$vaccine_1_manufacturer, unique(.x$vaccine_1_manufacturer)))
+  results_ci <- boot.ci(results_boot, type="basic", conf = 0.95) # 
+  results_obj <- list()
+  results_obj$boot <- results_boot
+  results_obj$ci <- results_ci
+  results_obj$results <- cbind(
+    "MedianBNT" = median(pull(.x, 2), na.rm=TRUE),
+    "MedianAZ" = median(pull(.x, 3), na.rm=TRUE),
+    "MedianFC" = median(pull(.x, 2), na.rm=TRUE)
+    /median(pull(.x, 3), na.rm=TRUE))
+  # if(verbose == TRUE) {
+  #   print(results_boot)
+  # print(results_ci)
+  # print("######################################################")
+  # print(strainComparison)
+  # print(c("Median1", "Median2", "Fold-decrease"))
+  # print(c(median(pull(.x, 2), na.rm=TRUE),
+  #         median(pull(.x, 3), na.rm=TRUE),
+  #         median(pull(.x, 2), na.rm=TRUE)/ median(pull(.x, 3), na.rm=TRUE) )
+  # )}
+  return(results_obj) })
+
+names(medianFC.AZvsBNT.allstrains) <- levels(seronaive.v2_28d_df.long.2$strain)
+
+
+for(i in 1:length(medianFC.AZvsBNT.allstrains)){
+  
+  if(i == 1) {
+    medianFC.AZvsBNT.allstrains.df <- data.frame(
+      cbind("strain"=names(medianFC.AZvsBNT.allstrains)[i],
+  medianFC.AZvsBNT.allstrains[[i]]$results,
+  "LL"=medianFC.AZvsBNT.allstrains[[i]]$ci$basic[,4],
+  "UL"=medianFC.AZvsBNT.allstrains[[i]]$ci$basic[,5],
+  "level" = medianFC.AZvsBNT.allstrains[[i]]$ci$basic[,1]))
+    
+  }
+  
+  if(i > 1) {
+    medianFC.AZvsBNT.allstrains.df <- rbind(medianFC.AZvsBNT.allstrains.df,
+      cbind("strain"=names(medianFC.AZvsBNT.allstrains)[i],
+  medianFC.AZvsBNT.allstrains[[i]]$results,
+  "LL"=medianFC.AZvsBNT.allstrains[[i]]$ci$basic[,4],
+  "UL"=medianFC.AZvsBNT.allstrains[[i]]$ci$basic[,5],
+  "level" = medianFC.AZvsBNT.allstrains[[i]]$ci$basic[,1]))
+    }
+  
+}
+
+
+medianFC.AZvsBNT.allstrains.df
+### Remove 5 and 10, as they are not numerically meaningful:
+medianFC.AZvsBNT.allstrains.df[medianFC.AZvsBNT.allstrains.df$MedianAZ %in% c(40), ]$LL <- ""
+medianFC.AZvsBNT.allstrains.df[medianFC.AZvsBNT.allstrains.df$MedianAZ %in% c(40), ]$UL <- ""
+medianFC.AZvsBNT.allstrains.df[medianFC.AZvsBNT.allstrains.df$MedianAZ %in% c(40), ]$level <- ""
+
+medianFC.AZvsBNT.allstrains.df[medianFC.AZvsBNT.allstrains.df$MedianAZ %in% c(40), ]$MedianAZ <- "<40"
+
+medianFC.AZvsBNT.allstrains.df
+
+```
+
+```{r}
+############ Ordered logistical regression
+## Plot drawn 2 chunks earlier
+## 1 chunk above this deals with median FC + boostrapping CI estimates.
+############
+olrTable <- data_for_barplot %>% 
+  ungroup() %>% 
+  select(sample_barcode, dialysis_centre_code, gender, age, vaccine, strain, ic50Range)
+
+
+fit_first <- rms::lrm(ic50Range ~  strain * vaccine, 
+                      data = olrTable, 
+                      x = TRUE, y = TRUE)
+
+fit_first
+
+results.model <- capture.output(fit_first)
+
+
+#knitr::kable(results.model[21:32], col.names = results.model[20])
+
+results <- capture.output(anova(fit_first))
+knitr::kable(results, col.names = "")
+# This prints the per coefficient P value:
+1-pchisq(coef(fit_first)^2/diag(vcov(fit_first)),1)
+
+anova(fit_first)
+
+my.valid <- validate(fit_first, method="boot", B=1000)
+my.calib <- calibrate(fit_first, method="boot", B=1000)
+par(bg="white", las=1)
+plot(my.calib, las=1)
+
+```
+
+```{r}
+
+##### Diagnostic plots for OLR model #####
+ic50 <- as.numeric(olrTable$ic50Range)
+aab <- olrTable$vaccine
+aac <- olrTable$strain
+Ecdf(~ic50|aac, groups= aab,  fun = qlogis)
+
+
+```
+
+```{r legacy_comparisions_data_not_in_repo, eval=F}
+
+### LEGACY controls
+
+##################
+##################
+### THIS CHUNK WILL FAIL. Legacy data available elsewhere.
+### Code as-is.
+##################
+##################
+
+load(file = "LEGACY_2_dose_cohort_parsed_to_plot_Vs_HD.RData")
+
+
+colnames(dose2cohort2plotwithHD) <- gsub(
+  colnames(dose2cohort2plotwithHD), 
+  pattern = "wildtype", 
+  replacement = "Wildtype")
+colnames(dose2cohort2plotwithHD) <- gsub(
+  colnames(dose2cohort2plotwithHD), 
+  pattern = "alpha", 
+  replacement = "Alpha")
+colnames(dose2cohort2plotwithHD) <- gsub(
+  colnames(dose2cohort2plotwithHD), 
+  pattern = "beta", 
+  replacement = "Beta")
+colnames(dose2cohort2plotwithHD) <- gsub(
+  colnames(dose2cohort2plotwithHD), 
+  pattern = "delta", 
+  replacement = "Delta")
+
+dose2cohort2plotwithHD$group <- "Legacy"
+# Plot:
+## seronaive HD after 2 doses
+## vs
+## seronaive (no prior Sx) LEGACY after 2 doses.
+
+
+seronaive.v2_28d_df <- df %>% filter(research_identifier %in% seronaive.ids$research_identifier) %>%
+  filter(time_point == "vax2_28d")
+
+seronaive.v2_28d_df$group <- "IC-HD"
+
+## HD cohort:
+#35% female
+# median age 65.
+dose2cohort2plotwithHD$gender <- factor(substr(dose2cohort2plotwithHD$gender, 1,1) )
+## NO PRIOR SYMPTOMS:
+dose2cohort2plotwithHD <- dose2cohort2plotwithHD %>% filter(str_detect(COVID_symptoms_pretty, "NO"))
+dose2cohort2plotwithHD %>% summary()
+
+## LEGACY (2 dose cohort):
+# 140 / (140+83) = 62% female
+# median age 40.
+combined.dose2cohort <- rbind(seronaive.v2_28d_df[, intersect(colnames(seronaive.v2_28d_df), colnames(dose2cohort2plotwithHD))],
+      dose2cohort2plotwithHD[, intersect(colnames(seronaive.v2_28d_df), colnames(dose2cohort2plotwithHD))]
+      )
+
+
+combined.dose2cohort.long <- combined.dose2cohort %>% pivot_longer(cols = ends_with("ic50"), 
+               names_to = "strain", 
+               values_to = "ic50") %>%
+  mutate(strain = factor(str_replace(strain,
+                                     pattern = "_ic50", 
+                                     replacement = ""),
+                         levels = c("Wildtype", "D614G", "Alpha", "Beta", "Delta")))
+
+legacy.hd.plot <-  ggplot(combined.dose2cohort.long, aes(group,ic50, col = vaccine)) + 
+  scale_y_continuous(trans='log2',limits = c(4, 5121), 
+                     breaks=c(5, 10, 64, 256, 1024, 5120), 
+                     labels=c("[0]", "[<40]    ", "64", "256", "1024", "[>2560]"),
+                     minor_breaks=c(32, 128, 512, 2048),
+                     guide = guide_axis(n.dodge=1)) +
+    scale_color_manual(values = c("#8E0152", "#276419")) +
+  geom_violin(trim = T, col = "black") + 
+  geom_jitter(position = position_jitter(width = 0.2), alpha=0.3, size=1.5) +
+  ylab(bquote('Virus Neutralisation, '~IC[50]~ '')) +
+  xlab("Cohort") + 
+  
+  facet_grid( vars(vaccine), vars(strain),
+             scales = "fixed") +
+  stat_summary(fun=median, geom = "point", color="black",  shape=5, size=1.5, stroke=1.5) + 
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+#############################################################################
+
+data_for_barplot <- combined.dose2cohort.long %>% filter(vaccine == "BNT162b2") %>%
+  filter(! is.na(ic50)) %>%
+  mutate(ic50Range = 
+           cut(ic50,
+               breaks=c(0,40,256,9999),
+               right=FALSE, label=c("<40", "40-256", ">256")))
+
+legacy.barplot.bnt <- ggplot(data_for_barplot, aes(x=ic50Range))  + 
+  geom_bar(aes(fill=vaccine, alpha=0.3)) +
+    scale_fill_manual(values = c("#8E0152", "#276419")) +
+  scale_y_continuous(guide = guide_axis(n.dodge=1), labels = c(0,"",50,"",100), breaks = c(0,25,50,75,100)) + 
+  coord_flip() + 
+  facet_grid(group ~ strain, switch = "y") +
+  ylab("# patients") +
+  xlab( bquote(''~IC[50]~ '') ) +
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+
+olrTable <- data_for_barplot %>% 
+  ungroup() %>% 
+  select(sample_barcode, age, strain, group, ic50Range)
+
+
+legacy_bnt.fit_first <- rms::lrm(ic50Range ~  strain * group, 
+                      data = olrTable, 
+                      x = TRUE, y = TRUE)
+
+legacy_bnt.fit_first
+
+anova(legacy_bnt.fit_first)
+
+#############################################################################
+
+data_for_barplot <- combined.dose2cohort.long %>% filter(vaccine == "AZD1222") %>%
+  filter(! is.na(ic50)) %>%
+  mutate(ic50Range = 
+           cut(ic50,
+               breaks=c(0,40,256,9999),
+               right=FALSE, label=c("<40", "40-256", ">256")))
+
+legacy.barplot.az <- ggplot(data_for_barplot, aes(x=ic50Range))  + 
+  geom_bar(aes(fill=vaccine, alpha=0.3)) +
+    scale_fill_manual(values = c("#8E0152", "#276419")) +
+  scale_y_continuous(guide = guide_axis(n.dodge=1), labels = c(0,"",50,"",100), breaks = c(0,25,50,75,100)) + 
+  coord_flip() + 
+  facet_grid(group ~ strain, switch = "y") +
+  ylab("# patients") +
+  xlab( bquote(''~IC[50]~ '') ) +
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+
+olrTable <- data_for_barplot %>% 
+  ungroup() %>% 
+  select(sample_barcode, age, strain, group, ic50Range)
+
+
+legacy_az.fit_first <- rms::lrm(ic50Range ~ strain *group, 
+                      data = olrTable, 
+                      x = TRUE, y = TRUE)
+
+legacy_az.fit_first
+
+anova(legacy_az.fit_first)
+
+
+######################################################################
+
+data_for_barplot <- combined.dose2cohort.long %>%
+  filter(! is.na(ic50)) %>%
+  mutate(ic50Range = 
+           cut(ic50,
+               breaks=c(0,40,256,9999),
+               right=FALSE, label=c("<40", "40-256", ">256")))
+
+legacy.barplot <- ggplot(data_for_barplot, aes(x=ic50Range))  + 
+  geom_bar(aes(fill=vaccine, alpha=0.3)) +
+    scale_fill_manual(values = c("#8E0152", "#276419")) +
+  scale_y_continuous(guide = guide_axis(n.dodge=1), labels = c(0,"",50,"",100), breaks = c(0,25,50,75,100)) + 
+  coord_flip() + 
+  facet_grid(vaccine + group ~ strain, switch = "y", ) +
+  ylab("# patients") +
+  xlab( bquote(''~IC[50]~ '') ) +
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+
+
+olrTable <- data_for_barplot %>% 
+  ungroup() %>% 
+  select(sample_barcode, age, strain, group, vaccine, ic50Range)
+
+olrTable$group2 <- paste(olrTable$group,olrTable$vaccine)
+legacy_all.fit_first <- rms::lrm(ic50Range ~ strain * group2, 
+                      data = olrTable, 
+                      x = TRUE, y = TRUE)
+
+legacy_all.fit_first
+
+anova(legacy_all.fit_first)
+
+
+########################################################################
+### Fold change estimates for table.
+
+medianFC.HDvsLEGACY.AZandBNT.allstrains <- combined.dose2cohort.long %>% 
+  ungroup() %>% 
+  select(sample_barcode, vaccine, strain, group, ic50) %>% 
+  group_by(strain, vaccine) %>% 
+  pivot_wider(values_from = ic50, names_from = group) %>% 
+  # Select to force BNT ahead of AZ, which makes more sense from FCs:
+  #select(sample_barcode, strain, IC-HD, LEGACY) %>% 
+  group_map( ~ {
+  results_boot <- boot(.x, boot_foldMedian, R=5000)
+  results_ci <- boot.ci(results_boot, type="basic") # 
+  results_obj <- list()
+  results_obj$boot <- results_boot
+  results_obj$ci <- results_ci
+  results_obj$results <- cbind(
+    "MedianICHD" = median(pull(.x, 2), na.rm=TRUE),
+    "MedianLegacy" = median(pull(.x, 3), na.rm=TRUE),
+    "MedianFC" = median(pull(.x, 2), na.rm=TRUE)
+    /median(pull(.x, 3), na.rm=TRUE))
+  # if(verbose == TRUE) {
+  #   print(results_boot)
+  # print(results_ci)
+  # print("######################################################")
+  # print(strainComparison)
+  # print(c("Median1", "Median2", "Fold-decrease"))
+  # print(c(median(pull(.x, 2), na.rm=TRUE),
+  #         median(pull(.x, 3), na.rm=TRUE),
+  #         median(pull(.x, 2), na.rm=TRUE)/ median(pull(.x, 3), na.rm=TRUE) )
+  # )}
+  return(results_obj) })
+
+names(medianFC.HDvsLEGACY.AZandBNT.allstrains) <- paste(rep(levels(combined.dose2cohort.long$strain), each =nlevels(combined.dose2cohort.long$vaccine)), levels(combined.dose2cohort.long$vaccine), sep = "_")
+
+medianFC.HDvsLEGACY.AZandBNT.allstrains
+
+
+```
+
+```{r fig.height=10, fig.width = 8, fig.keep="last"}
+p.valued.coded.D <- ggplot() + ylim(0,10) + xlim(0.8,2) + 
+  annotate(geom= "segment", x = 1, y = 2,xend = 1,yend = 8,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 2.03,xend = 1,yend = 2.03,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 7.97,xend = 1,yend = 7.97,size =0.5) + 
+  annotate(geom= "text",x =1.75, y = 5, label = "***", angle = 90) + 
+  theme_nothing()
+
+
+p.valued.coded.F <- ggplot() + ylim(0,10) + xlim(0.8,2) + 
+  annotate(geom= "segment", x = 1, y = 1,xend = 1,yend = 4,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 2.03,xend = 1,yend = 2.03,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 7.97,xend = 1,yend = 7.97,size =0.5) + 
+  annotate(geom= "segment", x = 1, y = 6,xend = 1,yend = 9,size =0.5) + 
+  annotate(geom= "text",x =1.75, y = 2.5, label = "***", angle = 90) + 
+  annotate(geom= "text",x =1.75, y = 7.5, label = "***", angle = 90) + 
+  theme_nothing()
+
+(bottom.panel.seron | p.valued.coded.D ) + plot_layout(widths = c(14,1))
+
+
+############
+
+seron.fc <- ggplot() + xlim(0,2) + ylim(0,10) + 
+  ylab("Fold-decrease\n\n(95% \nconfidence\nintervals)") + 
+  facet_wrap(facets = 1:5, nrow = 1) + 
+  annotate(geom = "text", x = 1, y = 8, size = 6,
+           label = format(round(as.numeric(
+             medianFC.AZvsBNT.allstrains.df$MedianFC), digits = 1), nsmall = 1)) + 
+   annotate(geom = "text", x = 1, y = 5, size = 4,
+           label = round(as.numeric(
+             medianFC.AZvsBNT.allstrains.df$LL), digits = 1)) +
+  annotate(geom = "text", x = 1, y = 3, size = 4,
+           label = c("-", "-", "", "", "")) +
+  
+  annotate(geom = "text", x = 1, y = 1, size = 4,
+           label = round(as.numeric(
+             medianFC.AZvsBNT.allstrains.df$UL), digits = 1)) +
+  theme_nothing() + theme(axis.title.y = element_text(angle = 0, vjust = 0.5, size = 10))
+
+##########
+
+a <- (
+  ( (top.panel.seron | plot_spacer()) + plot_layout(widths = c(16,1)) ) /
+    ( (seron.fc | plot_spacer()) + plot_layout(widths = c(16,1)) ) /
+            ( (bottom.panel.seron | p.valued.coded.D ) + plot_layout(widths = c(16,1)))
+  ) + plot_layout(height = c(3,1,2))
+a
+
+
+
+a <- a  & plot_annotation(tag_levels = list(c("A", "", "B"))) & theme(plot.tag = element_text(size = 14, face = "bold"))
+a
+
+
+if(sep.fig.files == TRUE) ggsave(filename = paste0(fig.dir,"/Figure2_seronaive_ICHD_nAbs.jpeg"),
+                                 device = "jpeg",
+                                 dpi = 600,
+                                 width = fig.width,
+                                height = 7)
+```
+
+```{r eval = F}
+
+##################
+##################
+### THIS CHUNK WILL FAIL. Dates removed from public dataset.
+### Code as-is.
+##################
+##################
+b <- (
+  ( (legacy.hd.plot | plot_spacer()) + plot_layout(widths = c(14,1)) ) /
+      ( ( legacy.barplot | p.valued.coded.F ) + plot_layout(widths = c(14,1)) )
+)
+
+b
+
+bb <- b + patchwork::plot_layout(heights = c(1,1.1)) & plot_annotation(tag_levels = list(c("C", "D"))) & theme(plot.tag = element_text(size = 14, face = "bold"))
+
+b <- b + patchwork::plot_layout(heights = c(1,1.1)) & plot_annotation(tag_levels = list(c("A", "B"))) & theme(plot.tag = element_text(size = 14, face = "bold"))
+
+if(sep.fig.files == TRUE) ggsave(filename = paste0(fig.dir,"/Figure3_seronaive_ICHD_vs_no_symptoms_Legacy_nAbs.jpeg"),
+                                 device = "jpeg",
+                                 dpi = 600,
+                                 width = fig.width,
+                                height = 8)
+
+# plot_grid(
+#   # First row::
+#     plot_grid(
+#   # Time series plots in their own wrap so axes align.
+#     plot_grid(g1, g2, 
+#             ncol = 1,align = "hv",
+#             rel_heights = c(1,1))
+#     , g4,
+#     ncol = 2,rel_widths = c(4,1.5),
+#     labels = c("A", "B")),
+#            
+#   # Second row:
+#   plot_grid(a,
+#             b,
+#             
+#             ncol = 2,
+#             rel_widths = c(1,1.1)),
+#   
+#   ncol = 1,rel_heights = c(1,3))
+
+## 4 panel figure 2:
+# aa <- a + plot_layout(height = c(3,2,2))
+# 
+# plot_grid(aa,
+#              bb,
+#              
+#              ncol = 2,
+#              rel_widths = c(1,1))
+# 
+# if(sep.fig.files == TRUE) { ggsave(filename = paste0(fig.dir,"/Figure2_4_panel_version.jpeg"),
+#                                  device = "jpeg",
+#                                  dpi = 600,
+#                                  width = fig.width,
+#                                 height = 8) }
+```
+
+
+\pagebreak
+
+# Figure Legends
+
+
+## Figure 1: Neutralising antibody responses after two doses of AZD1222 or BNT162b2 in seronaive haemodialysis patients
+
+(A) Study design. Dates of vaccine administration and serum sampling times are shown in the top and bottom panels respectively. N=`r nrow(df)/3` patients.
+(B) The proportion of patients defined as seronaive at the time of first vaccination. Seronaive was defined as (i) no detectable anti-S IgG by ELISA (XXX patients of 178 had no anti-S IgG), no positive PCR results before first dose (XXX patients) and no detectable neutralising antibodies to either wildtype SARS-CoV-2 or SARS-CoV-2 carrying the D614G spike mutation at baseline (XXX patients).
+
+## Figure 2:
+(A) Live virus microneutralisation titres against SARS-CoV-2: wildtype, the D614G spike mutant, and VOCs - alpha, beta and delta - at median of 33 days after two doses in seronaive haemodialysis patients comparing AZD1222 and BNT162b2 responses (AZD1222 n=`r seronaive.ids %>% filter(vaccine == "AZD1222") %>% nrow()`, BNT162b2 n=`r seronaive.ids %>% filter(vaccine == "BNT162b2") %>% tally()`).
+(B) Data as in (A) plotted with strafication of titres as NAbT could fall below the quantifiable range (see also Supplementary Table XXX for ordinal logistic regression). P<0.0001 is indicated by *** for the vaccine term.
+
+In (A) and (B), the medians are plotted as a black diamond. Note that the median is below the quantitative range (<40) in some instances. The fold-change in medians is shown. Where the median is <40, it has been set to 40 to calculate an illustrative fold-change. 95% confidence intervals are shown, when the median IC50 of both groups is > 40.
+
+
+## Figure 3 / 2C & D
+(A) and (B) Microneutralisation titres as in (Figure 2), comparing two doses in seronaive haemodialysis patients (IC-HD) with two doses in never symptomatic healthy individuals (Legacy) for AZD1222 and BNT162b2. (Supplementary Tables XXX). P<0.0001 is indicated by *** for the cohort term.
+
+
+In (A) and (B), the medians are plotted as a black diamond. Note that the median is below the quantitative range (<40) in some instances.
+
+\pagebreak
+
+## Supplementary tables
+
+__NB__ Switching the knitr export format to docx gives results that are easier to typeset into tables.
+
+
+\captionsetup[table]{labelformat=empty}
+
+```{r results = "asis"}
+
+## ETHNICITY, AGE_IN_YEARS and IMMUNOSUPPRESSION are not in the public dataset.
+
+## NB results = "asis" for knitr to pass the console output to pandoc, to drawn table.
+table1(df %>% filter(time_point == "baseline") %>%
+         #mutate(age = age_in_years) %>%
+         distinct(research_identifier, .keep_all = TRUE),
+              age,
+              gender,
+         #     ethnicity,
+       diabetic,
+    #   immunosuppressed,
+       dialysis_centre_code,
+              splitby = "vaccine",
+              test = TRUE,
+              # assume parametric distribution:
+              param = TRUE, 
+              na.rm = TRUE,
+              output = "pandoc",
+       caption = "Supplementary table 1: Demographics of the whole interim report cohort, grouped by vaccine")
+
+
+
+```
+
+\pagebreak
+\captionsetup[table]{labelformat=empty}
+
+```{r results = "asis"}
+
+## NB results = "asis" for knitr to pass the console output to pandoc, to drawn table.
+
+## ETHNICITY, AGE_IN_YEARS and IMMUNOSUPPRESSION are not in the public dataset.
+
+table1(df %>% filter(time_point == "baseline") %>%
+         filter(research_identifier %in% seronaive.ids$research_identifier) %>%
+         distinct(research_identifier, .keep_all = TRUE) #%>%
+        # mutate(age = age_in_years)
+       ,
+       
+              age,
+              gender,
+         #     ethnicity,
+       diabetic,
+   #    immunosuppressed,
+       vaccine,
+       dialysis_centre_code,
+              splitby = "vaccine",
+              test = TRUE,
+              # assume parametric distribution:
+              param = TRUE, 
+              na.rm = TRUE,
+              output = "pandoc",
+       caption = "Supplementary table 2: Demographics of the seronaive cohort")
+
+```
+
+For supplementary tables 1 and 2, P values are t tests for single level continuous variables (eg age) and ANOVAs for higher levels (eg ethnicity). The Chi2 tests for categorical data (eg gender).
+
+\pagebreak
+
+\captionsetup[table]{labelformat=empty}
+
+```{r results = "asis"}
+
+## NB results = "asis" for knitr to pass the console output to pandoc, to drawn table.
+
+
+# (A) Between strains and vaccines
+medianFC.AZvsBNT.allstrains.df %<>% as_tibble()
+medianFC.AZvsBNT.allstrains.df$MedianBNT %<>% as.numeric()
+medianFC.AZvsBNT.allstrains.df$MedianAZ %<>% as.numeric()
+medianFC.AZvsBNT.allstrains.df$MedianFC %<>% as.numeric()
+medianFC.AZvsBNT.allstrains.df$LL %<>% as.numeric()
+medianFC.AZvsBNT.allstrains.df$UL %<>% as.numeric()
+medianFC.AZvsBNT.allstrains.df$level %<>% as.numeric()
+
+medianFC.AZvsBNT.allstrains.df$MedianBNT %<>% str_replace(pattern = "^5$", replacement = "5*")
+medianFC.AZvsBNT.allstrains.df$MedianAZ %<>% str_replace(pattern = "^5$", replacement = "5*")
+medianFC.AZvsBNT.allstrains.df$MedianBNT %<>% str_replace(pattern = "^10$", replacement = "10*")
+medianFC.AZvsBNT.allstrains.df$MedianAZ %<>% str_replace(pattern = "^10$", replacement = "10*")
+
+knitr::kable(medianFC.AZvsBNT.allstrains.df, digits = 2, row.names = FALSE, format = "pandoc",
+             caption = "Supplementary table: Median NAbT fold changes between AZD1222 and BNT162b2 for each SARS-CoV-2 variant, related to Figure 1C (* demark medians below the quantitative [10*] or qualitative scales [5*]. Fold changes are calculated against 40, the lower limit of the quantification scale)",
+             label = NA)
+
+# (B) Between strains, within a vaccine group
+
+between.strains.tbl <- rbind(
+  cbind("vaccine" = c("AZD1222"), AZ.medianFC.df),
+cbind("vaccine" = c("BNT162b2"), BNT162b2.medianFC.df)
+)
+
+between.strains.tbl %<>% as_tibble()
+between.strains.tbl$Median1 %<>% as.numeric()
+between.strains.tbl$Median2 %<>% as.numeric()
+between.strains.tbl$MedianFC %<>% as.numeric()
+between.strains.tbl$LL %<>% as.numeric()
+between.strains.tbl$UL %<>% as.numeric()
+between.strains.tbl$level %<>% as.numeric()
+
+between.strains.tbl$Median2 %<>% str_replace(pattern = "^5$", replacement = "5*")
+between.strains.tbl$Median1 %<>% str_replace(pattern = "^5$", replacement = "5*")
+between.strains.tbl$Median1 %<>% str_replace(pattern = "^10$", replacement = "10*")
+between.strains.tbl$Median2 %<>% str_replace(pattern = "^10$", replacement = "10*")
+
+cat("\\captionsetup[table]{labelformat=empty}")
+
+knitr::kable(between.strains.tbl, digits = 2, row.names = FALSE, format = "pandoc",
+             caption = "Supplementary table: Median NAbT fold changes between wildtype and variant SARS-CoV-2 for each vaccine, related to Figure X (* demark medians below the quantitative [10*] or qualitative scales [5*]. Fold changes are calculated against 40, the lower limit of the quantification scale)",
+             label = NA)
+```
+
+\pagebreak
+
+\captionsetup[table]{labelformat=empty}
+
+```{r results = "asis"}
+
+## NB results = "asis" for knitr to pass the console output to pandoc, to drawn table.
+
+eg <- gsub(results.model[3],pattern = "*\\(", replacement = "")
+eg <- gsub(eg,pattern = ",.*", replacement = "")
+eg <- gsub(eg, pattern = "Range", replacement = "_binned")
+eg <- gsub(eg, pattern = " rms::lrmformula = ", replacement = "")
+
+knitr::kable(results.model[15:25], col.names = results.model[14],
+             caption = paste0("Supplementary table: Ordered logistic regression model of effect of strain and vaccine type on neutralising antibody titres 33 days after 2 doses in IC-HD patients, relating to Figure X. Model: ",eg))
+
+results <- capture.output(anova(fit_first))
+knitr::kable(results[4:length(results)], col.names = results[3], 
+             caption = paste0("Supplementary table: ANOVA of Ordered logistic regression model in Supplementary table X, relating to Figure X"))
+
+## pchisq(144.86, 5, lower.tail = F) # if you want precise P value.
+```
+
+\captionsetup[table]{labelformat=empty}
+
+```{r results = "asis", eval = F}
+
+
+####
+# LEGACY data not included in public dataset.
+# This chunk will fail.
+####
+
+## NB results = "asis" for knitr to pass the console output to pandoc, to drawn table.
+
+
+table1(combined.dose2cohort ,
+              age,
+              gender,
+              splitby = "group",
+              test = TRUE,
+              # assume parametric distribution:
+              param = TRUE, 
+              na.rm = TRUE,
+              output = "pandoc",
+       caption = "Supplementary table: Demographics comparison between IC-HD and Legacy cohorts",
+             label = NA)
+
+
+```
+
+## Supplementary table - seropositive (re s figure 1)
+
+```{r  eval = F, results='all', fig.height=6, fig.width = 8,fig.keep="none"}
+
+
+####
+# LEGACY data not included in public dataset.
+# This chunk will fail.
+####
+
+legacy_az.fit_first
+
+
+anova(legacy_az.fit_first)
+
+
+legacy_bnt.fit_first
+
+
+anova(legacy_bnt.fit_first)
+```
+
+
+## Supplementary table - seropositive (re s figure 1)
+
+```{r  fig.height=6, fig.width = 8,fig.keep="none"}
+
+seroPOSITIVE.ids <- df %>% filter( ! (research_identifier %in% seronaive.ids$research_identifier))
+
+seroPOSITIVE.v2_28d_df <- df %>% filter(df$research_identifier %in% seroPOSITIVE.ids$research_identifier) %>% filter(time_point == "vax2_28d")
+ 
+seroPOSITIVE.v2_28d_df.long  <- df %>% filter(research_identifier %in% seroPOSITIVE.ids$research_identifier) %>%
+  filter(time_point == "vax2_28d") %>%
+  pivot_longer(cols = ends_with("ic50"), 
+               names_to = "strain", 
+               values_to = "ic50")  %>%
+  
+  mutate(strain = factor(str_replace(strain,
+                                     pattern = "_ic50", 
+                                     replacement = ""),
+                         levels = c("Wildtype", "D614G", "Alpha", "Beta", "Delta")))
+
+top.panel.seroP <- ggplot(seroPOSITIVE.v2_28d_df.long, aes(vaccine,ic50, col = vaccine)) + 
+  scale_y_continuous(trans='log2',limits = c(4, 5121), 
+                     breaks=c(5, 10, 64, 256, 1024, 5120), 
+                     labels=c("[0]", "[<40]    ", "64", "256", "1024", "[>2560]"),
+                     minor_breaks=c(32, 128, 512, 2048),
+                     guide = guide_axis(n.dodge=1)) +
+    scale_color_manual(values = c("#8E0152", "#276419")) +
+  geom_violin(trim = T, col = "black") + 
+  geom_jitter(position = position_jitter(width = 0.2), alpha=0.3, size=1.5) +
+  ylab(bquote('Virus Neutralisation, '~IC[50]~ '')) +
+  xlab("Vaccine") + 
+  
+  facet_wrap(vars(strain), nrow = 1, 
+             scales = "fixed") +
+  stat_summary(fun=median, geom = "point", color="black",  shape=5, size=1.5, stroke=1.5) + 
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+data_for_barplot_seroP <- seroPOSITIVE.v2_28d_df.long %>% 
+  filter(! is.na(ic50)) %>%
+  mutate(ic50Range = 
+           cut(ic50,
+               breaks=c(0,40,256,9999),
+               right=FALSE, label=c("<40", "40-256", ">256")))
+
+bottom.panel.seroP <- ggplot(data_for_barplot_seroP, aes(x=ic50Range))  + 
+  geom_bar(aes(fill=vaccine, alpha=0.3)) +
+    scale_fill_manual(values = c("#8E0152", "#276419")) +
+  scale_y_continuous(guide = guide_axis(n.dodge=1)) + 
+  coord_flip() + 
+  facet_grid(vaccine ~ strain, switch = "y") +
+  ylab("# patients") +
+  xlab( bquote(''~IC[50]~ '') ) +
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+olrTable <- data_for_barplot_seroP %>% 
+  ungroup() %>% 
+  select(sample_barcode, age, vaccine, strain, ic50Range)
+
+
+P_fit_first <- rms::lrm(ic50Range ~ strain * vaccine, 
+                      data = olrTable, 
+                      x = TRUE, y = TRUE)
+
+P_fit_first
+
+anova(P_fit_first)
+
+#####
+  (( (top.panel.seroP | plot_spacer()) + plot_layout(widths = c(16,1)) ) /
+            ( (bottom.panel.seroP | p.valued.coded.D ) + plot_layout(widths = c(16,1)))
+  ) + 
+  patchwork::plot_layout(heights = c(1,1))
+
+
+```
+
+```{r results = "asis"}
+P_fit_first
+
+anova(P_fit_first)
+```
+
+\pagebreak
+
+## Supplementary figure 1: Live-virus microneutralisation antibody titres in infection-experienced IC-HD patients
+
+```{r  fig.height=6, fig.width = 8,fig.keep="all"}
+  (( (top.panel.seroP | plot_spacer()) + plot_layout(widths = c(16,1)) ) /
+            ( (bottom.panel.seroP | p.valued.coded.D ) + plot_layout(widths = c(16,1)))
+  ) + 
+  patchwork::plot_layout(heights = c(1,1)) +
+  plot_annotation(tag_levels = list(c('A', 'B'))) & 
+  theme(plot.margin = unit(c(0,1,0,0), "mm")) &
+  theme(plot.tag = element_text(size = 14, face = "bold"))
+
+if(sep.fig.files == TRUE) { ggsave(filename = paste0(fig.dir,"/Supp_Figure1_seroPositive.jpeg"),
+                                 device = "jpeg",
+                                 dpi = 600,
+                                 width = fig.width,
+                                height = 5) }
+
+```
+
+(A) Live virus microneutralisation titres against SARS-CoV-2: wildtype, the D614G spike mutant, and VOCs - alpha, beta and delta - 33 days after two doses in seronaive haemodialysis patients comparing AZD1222 and BNT162b2 responses (`r nrow(seroPOSITIVE.v2_28d_df)` patients in total (AZD1222 n=`r seroPOSITIVE.v2_28d_df %>% filter(vaccine == "AZD1222") %>% nrow()`; BNT162b2 n=`r seroPOSITIVE.v2_28d_df %>% filter(vaccine == "BNT162b2") %>% nrow()`).
+(B) Data as in (A) plotted with strafication of titres, P < 0.001 from denoted by *** (ANOVA of regression model; see also Supplementary Table 7 for ordinal logistic regression).
+
+\pagebreak
+
+## Supplementary figure 2: Comparing nAbT responses by age group, gender, diabetes and immunosuppression in seronaive IC-HD patients
+
+```{r fig.height=10, fig.width = 8,fig.keep="all"}
+
+# seronaive.v2_28d_df.long <- seronaive.v2_28d_df.long %>%
+#          mutate(age = factor(ifelse(age_in_years <65,  "18-65", ">65"), levels = c("18-65", ">65")))
+                
+data_for_barplot <- seronaive.v2_28d_df.long %>% 
+  filter(! is.na(ic50)) %>%
+  mutate(ic50Range = 
+           cut(ic50,
+               breaks=c(0,40,256,9999),
+               right=FALSE, label=c("<40", "40-256", ">256")))
+
+# plot_grid(
+## Aged >65 or not.
+# plot_grid(
+# 
+# ggplot(seronaive.v2_28d_df.long,
+#   aes(age, ic50, col = vaccine)) + 
+#    scale_y_continuous(trans='log2',limits = c(4, 5121), 
+#                      breaks=c(5, 10, 64, 256, 1024, 5120), 
+#                      labels=c("[0]", "[<40]    ", "64", "256", "1024", "[>2560]"),
+#                      minor_breaks=c(32, 128, 512, 2048)
+#   ) + 
+#     scale_color_manual(values = c("#8E0152", "#276419")) +
+#   geom_violin(trim = T, col = "black") + 
+#   geom_jitter(position = position_jitter(width = 0.2), alpha=0.3, size=1.5) +
+#   ylab(bquote('Virus Neutralisation, '~IC[50]~ '')) + facet_grid( vars(vaccine), vars(strain)) +
+#   stat_summary(fun=median, geom = "point", color="black",  shape=5, size=1.5, stroke=1.5) + 
+#   theme_pubr(base_size = 10, legend = "none"),
+
+agebars <- ggplot(data_for_barplot, aes(x=ic50Range))  + 
+  geom_bar(aes(fill=vaccine, alpha=0.3)) +
+    scale_fill_manual(values = c("#8E0152", "#276419")) +
+  scale_y_continuous(guide = guide_axis(n.dodge=1)) + 
+  coord_flip() + 
+  facet_grid(vaccine + age ~ strain, switch = "y") +
+  ylab("# patients") +
+  xlab( bquote(''~IC[50]~ '') ) +
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+## Gender
+# 
+# ggplot(seronaive.v2_28d_df.long,
+#   aes(gender, ic50, col = vaccine)) + 
+#    scale_y_continuous(trans='log2',limits = c(4, 5121), 
+#                      breaks=c(5, 10, 64, 256, 1024, 5120), 
+#                      labels=c("[0]", "[<40]    ", "64", "256", "1024", "[>2560]"),
+#                      minor_breaks=c(32, 128, 512, 2048)
+#   ) + 
+#     scale_color_manual(values = c("#8E0152", "#276419")) +
+#   geom_violin(trim = T, col = "black") + 
+#   geom_jitter(position = position_jitter(width = 0.2), alpha=0.3, size=1.5) +
+#   ylab(bquote('Virus Neutralisation, '~IC[50]~ '')) + facet_grid( vars(vaccine), vars(strain)) +
+#   stat_summary(fun=median, geom = "point", color="black",  shape=5, size=1.5, stroke=1.5) + 
+#   theme_pubr(base_size = 10, legend = "none"),
+
+
+gender.bars <- ggplot(data_for_barplot, aes(x=ic50Range))  + 
+  geom_bar(aes(fill=vaccine, alpha=0.3)) +
+    scale_fill_manual(values = c("#8E0152", "#276419")) +
+  scale_y_continuous(guide = guide_axis(n.dodge=1)) + 
+  coord_flip() + 
+  facet_grid(vaccine + gender ~ strain, switch = "y") +
+  ylab("# patients") +
+  xlab( bquote(''~IC[50]~ '') ) +
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+
+# 
+# labels = LETTERS[1:4],
+# ncol = 1),
+
+
+## Diabetes
+# plot_grid(
+# ggplot(seronaive.v2_28d_df.long,
+#   aes(diabetic, ic50, col = vaccine)) + 
+#    scale_y_continuous(trans='log2',limits = c(4, 5121), 
+#                      breaks=c(5, 10, 64, 256, 1024, 5120), 
+#                      labels=c("[0]", "[<40]    ", "64", "256", "1024", "[>2560]"),
+#                      minor_breaks=c(32, 128, 512, 2048)
+#   ) + 
+#     scale_color_manual(values = c("#8E0152", "#276419")) +
+#   geom_violin(trim = T, col = "black") + 
+#   geom_jitter(position = position_jitter(width = 0.2), alpha=0.3, size=1.5) +
+#   ylab(bquote('Virus Neutralisation, '~IC[50]~ '')) + facet_grid( vars(vaccine), vars(strain)) +
+#   stat_summary(fun=median, geom = "point", color="black",  shape=5, size=1.5, stroke=1.5) + 
+#   theme_pubr(base_size = 10, legend = "none"),
+
+
+diabetes.bars <- ggplot(data_for_barplot, aes(x=ic50Range))  + 
+  geom_bar(aes(fill=vaccine, alpha=0.3)) +
+    scale_fill_manual(values = c("#8E0152", "#276419")) +
+  scale_y_continuous(guide = guide_axis(n.dodge=1)) + 
+  coord_flip() + 
+  facet_grid(vaccine + diabetic ~ strain, switch = "y") +
+  ylab("# patients") +
+  xlab( bquote(''~IC[50]~ '') ) +
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+
+## Immunosuppression
+
+# ggplot(seronaive.v2_28d_df.long,
+#   aes(immunosuppressed, ic50, col = vaccine)) + 
+#    scale_y_continuous(trans='log2',limits = c(4, 5121), 
+#                      breaks=c(5, 10, 64, 256, 1024, 5120), 
+#                      labels=c("[0]", "[<40]    ", "64", "256", "1024", "[>2560]"),
+#                      minor_breaks=c(32, 128, 512, 2048)
+#   ) + 
+#     scale_color_manual(values = c("#8E0152", "#276419")) +
+#   geom_violin(trim = T, col = "black") + 
+#   geom_jitter(position = position_jitter(width = 0.2), alpha=0.3, size=1.5) +
+#   ylab(bquote('Virus Neutralisation, '~IC[50]~ '')) + facet_grid( vars(vaccine), vars(strain)) +
+#   stat_summary(fun=median, geom = "point", color="black",  shape=5, size=1.5, stroke=1.5) + 
+#   theme_pubr(base_size = 10, legend = "none"),
+
+
+# immsup.bars <- ggplot(data_for_barplot, aes(x=ic50Range))  + 
+#   geom_bar(aes(fill=vaccine, alpha=0.3)) +
+#     scale_fill_manual(values = c("#8E0152", "#276419")) +
+#   scale_y_continuous(guide = guide_axis(n.dodge=1)) + 
+#   coord_flip() + 
+#   facet_grid(vaccine + immunosuppressed ~ strain, switch = "y") +
+#   ylab("# patients") +
+#   xlab( bquote(''~IC[50]~ '') ) +
+#   theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+#   rotate_x_text()
+
+###########
+
+p.valued.coded.age <- ggplot() + ylim(0,10) + xlim(0,10) + 
+  annotate(geom= "segment", x = 0, y = 1,xend = 0,yend = 4,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 2.03,xend = 1,yend = 2.03,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 7.97,xend = 1,yend = 7.97,size =0.5) + 
+  annotate(geom= "segment", x = 0, y = 6,xend = 0,yend = 9,size =0.5) + 
+  annotate(geom= "text",x =6, y = 2.5, label = "p<0.0001",size=2) + 
+  annotate(geom= "text",x =6, y = 7.5, label = "p=0.54",size=2) + 
+  theme_nothing()
+
+##
+p.valued.coded.gender <-ggplot() + ylim(0,10) + xlim(0,10) + 
+  annotate(geom= "segment", x = 0, y = 1,xend = 0,yend = 4,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 2.03,xend = 1,yend = 2.03,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 7.97,xend = 1,yend = 7.97,size =0.5) + 
+  annotate(geom= "segment", x = 0, y = 6,xend = 0,yend = 9,size =0.5) + 
+  annotate(geom= "text",x =6, y = 2.5, label = "p=0.008",size=2) + 
+  annotate(geom= "text",x =6, y = 7.5, label = "p=0.61",size=2) + 
+  theme_nothing()
+
+
+
+p.valued.coded.diabetes <- ggplot() + ylim(0,10) + xlim(0,10) + 
+  annotate(geom= "segment", x = 0, y = 1,xend = 0,yend = 4,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 2.03,xend = 1,yend = 2.03,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 7.97,xend = 1,yend = 7.97,size =0.5) + 
+  annotate(geom= "segment", x = 0, y = 6,xend = 0,yend = 9,size =0.5) + 
+  annotate(geom= "text",x =6, y = 2.5, label = "p=0.24",size=2) + 
+  annotate(geom= "text",x =6, y = 7.5, label = "p=0.97",size=2) + 
+  theme_nothing()
+
+
+
+
+
+# p.valued.coded.immsup <- ggplot() + ylim(0,10) + xlim(0,10) + 
+#   annotate(geom= "segment", x = 0, y = 1,xend = 0,yend = 4,size =0.5) + 
+#   #annotate(geom= "segment", x = 0.5, y = 2.03,xend = 1,yend = 2.03,size =0.5) + 
+#   #annotate(geom= "segment", x = 0.5, y = 7.97,xend = 1,yend = 7.97,size =0.5) + 
+#   annotate(geom= "segment", x = 0, y = 6,xend = 0,yend = 9,size =0.5) + 
+#   annotate(geom= "text",x =6, y = 2.5, label = "p=0.25", size=2) + 
+#   annotate(geom= "text",x =6, y = 7.5, label = "p<0.0001",size=2) + 
+#   theme_nothing()
+
+
+### plots:
+### NB immunosuppression plot removed, as immunosuppression is not in the public data.
+(( ((agebars | p.valued.coded.age) + plot_layout(widths = c(6,1))) /
+
+((gender.bars | p.valued.coded.gender) + plot_layout(widths = c(6,1))) 
+  ) | ( 
+    ((diabetes.bars | p.valued.coded.diabetes) + plot_layout(widths = c(6,1))))) &   plot_annotation(tag_levels = list(c("A", "", "B", "", "C", ""))) & 
+  theme(plot.tag = element_text(size = 14, face = "bold")) & theme(
+    text = element_text(size =8),
+    strip.text = element_text(size =6)) 
+
+
+if(sep.fig.files == TRUE) { ggsave(filename = paste0(fig.dir,"/Supp_Figure2_Age_Gender_Diabetes_IS.jpeg"),
+                                 device = "jpeg",
+                                 dpi = 600,
+                                 width = fig.width,
+                                height = 8) }
+
+```
+
+NAbTs are compared median 33 days after two doses in seronaive haemodialysis patients. The data is grouped by age (18-65 or >65 years old, A), gender (B), the presence of diabetes (C), or the presence of immunosuppression (D - not plotted as immunosuppression data is not public) and each vaccine is shown separately.
+
+\pagebreak
+
+## Supplementary figure - just centre C
+
+```{r results='all',fig.keep='all'}
+
+dataForPlots <- seronaive.v2_28d_df.long %>% filter(dialysis_centre_code == "C")
+
+
+### Plot the data:
+top.panel.seron.centreC <- ggplot(dataForPlots, aes(vaccine,ic50, col = vaccine)) + 
+  scale_y_continuous(trans='log2',limits = c(4, 5121), 
+                     breaks=c(5, 10, 64, 256, 1024, 5120), 
+                     labels=c("[0]", "[<40]    ", "64", "256", "1024", "[>2560]"),
+                     minor_breaks=c(32, 128, 512, 2048),
+                     guide = guide_axis(n.dodge=1)) +
+  scale_color_manual(values = c("#8E0152", "#276419")) +
+  geom_violin(trim = T, col = "black") + 
+  geom_jitter(position = position_jitter(width = 0.2), alpha=0.3, size=1.5) +
+  ylab(bquote('Virus Neutralisation, '~IC[50]~ '')) +
+  xlab("Vaccine") + 
+  
+  facet_wrap(vars(strain), nrow = 1, 
+             scales = "fixed") +
+  stat_summary(fun=median, geom = "point", color="black",  shape=5, size=1.5, stroke=1.5) + 
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+data_for_barplot_centreC <- seronaive.v2_28d_df.long %>% filter(dialysis_centre_code == "C") %>% 
+  filter(! is.na(ic50)) %>%
+  mutate(ic50Range = 
+           cut(ic50,
+               breaks=c(0,40,256,9999),
+               right=FALSE, label=c("<40", "40-256", ">256")))
+
+bottom.panel.seron.centreC <- ggplot(data_for_barplot_centreC, aes(x=ic50Range))  + 
+  geom_bar(aes(fill=vaccine, alpha=0.3)) +
+    scale_fill_manual(values = c("#8E0152", "#276419")) +
+  scale_y_continuous(guide = guide_axis(n.dodge=1), labels = c(0,"",30,"",60), breaks = c(0,15,30,45,60)) + 
+  coord_flip() + 
+  facet_grid(vaccine ~ strain, switch = "y") +
+  ylab("# patients") +
+  xlab( bquote(''~IC[50]~ '') ) +
+  theme_pubr(base_size = 10, legend = "none") + theme(strip.text = element_text(size = 8)) + 
+  rotate_x_text()
+
+top.panel.seron.centreC / bottom.panel.seron.centreC + patchwork::plot_layout(heights = c(1,1))
+
+
+###
+olrTable <- data_for_barplot_centreC %>% 
+  ungroup() %>% 
+  select(sample_barcode, age, vaccine, strain, ic50Range)
+
+fit_first <- rms::lrm(ic50Range ~ strain * vaccine, 
+                      data = olrTable , 
+                      x = TRUE, y = TRUE)
+
+fit_first
+anova(fit_first)
+
+olrTable %>% filter(strain == "Wildtype") %>% group_by(vaccine) %>% tally()
+
+####
+p.valued.coded.Z <- ggplot() + ylim(0,10) + xlim(0.8,2) + 
+  annotate(geom= "segment", x = 1, y = 2,xend = 1,yend = 8,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 2.03,xend = 1,yend = 2.03,size =0.5) + 
+  #annotate(geom= "segment", x = 0.5, y = 7.97,xend = 1,yend = 7.97,size =0.5) + 
+  annotate(geom= "text",x =1.75, y = 5, label = "***", angle = 90) + 
+  theme_nothing()
+####
+
+sf3 <- (
+  ( (top.panel.seron.centreC | plot_spacer()) + plot_layout(widths = c(16,1)) ) /
+            ( (bottom.panel.seron.centreC | p.valued.coded.Z ) + plot_layout(widths = c(16,1)))
+  ) + plot_layout(height = c(3,2))
+sf3
+
+
+if(sep.fig.files == TRUE) { ggsave(filename = paste0(fig.dir,"/Supp_Figure3_Centre_C_seronaive_nAbs.jpeg"),
+                                 device = "jpeg",
+                                 dpi = 600,
+                                 width = fig.width,
+                                height = 6) }
+```
+
+## Text call outs
+
+## Legend for SF 2
+
+
+```{r, echo = T, results="all"}
+####
+olrTable <- data_for_barplot %>% 
+  ungroup() %>% 
+  select(sample_barcode, age, vaccine, strain, ic50Range)
+
+z_fit_first <- rms::lrm(ic50Range ~ strain * age, 
+                      data = olrTable %>% filter(vaccine == "AZD1222"), 
+                      x = TRUE, y = TRUE)
+
+z_fit_first
+anova(z_fit_first)
+
+z_fit_first <- rms::lrm(ic50Range ~ strain * age, 
+                      data = olrTable %>% filter(vaccine == "BNT162b2"), 
+                      x = TRUE, y = TRUE)
+
+z_fit_first
+anova(z_fit_first)
+
+##############
+####
+
+olrTable <- data_for_barplot %>% 
+  ungroup() %>% 
+  select(sample_barcode, gender, vaccine, strain, ic50Range)
+
+z_fit_first <- rms::lrm(ic50Range ~ strain * gender, 
+                      data = olrTable %>% filter(vaccine == "AZD1222"), 
+                      x = TRUE, y = TRUE)
+
+z_fit_first
+anova(z_fit_first)
+
+##############
+
+z_fit_first <- rms::lrm(ic50Range ~ strain * gender, 
+                      data = olrTable %>% filter(vaccine == "BNT162b2"), 
+                      x = TRUE, y = TRUE)
+
+z_fit_first
+anova(z_fit_first)
+
+##############
+####
+
+olrTable <- data_for_barplot %>% 
+  ungroup() %>% 
+  select(sample_barcode, diabetic, vaccine, strain, ic50Range)
+
+z_fit_first <- rms::lrm(ic50Range ~ strain * diabetic, 
+                      data = olrTable %>% filter(vaccine == "AZD1222"), 
+                      x = TRUE, y = TRUE)
+
+z_fit_first
+anova(z_fit_first)
+
+####
+
+z_fit_first <- rms::lrm(ic50Range ~ strain * diabetic, 
+                      data = olrTable %>% filter(vaccine == "BNT162b2"), 
+                      x = TRUE, y = TRUE)
+
+z_fit_first
+anova(z_fit_first)
+
+################
+#### Immunosuppression not in the public dataset - all lines #'d out.
+
+# olrTable <- data_for_barplot %>% 
+#   ungroup() %>% 
+#   select(sample_barcode, immunosuppressed, vaccine, strain, ic50Range)
+# 
+# z_fit_first <- rms::lrm(ic50Range ~ strain * immunosuppressed, 
+#                       data = olrTable %>% filter(vaccine == "AZD1222"), 
+#                       x = TRUE, y = TRUE)
+# 
+# z_fit_first
+# anova(z_fit_first)
+# 
+# 
+# z_fit_first <- rms::lrm(ic50Range ~ strain * immunosuppressed, 
+#                       data = olrTable %>% filter(vaccine == "BNT162b2"), 
+#                       x = TRUE, y = TRUE)
+# 
+# z_fit_first
+# anova(z_fit_first)
+####
+```
+
+```{r echo=T, results='include'}
+sessionInfo()
+```
